@@ -1,0 +1,19 @@
+Macro 10000
+Coarse 100
+Precise 1
+
+Problem Floats are -1 to 1 in increments of 1/127. 0.1 doesn't exist. 
+
+Precise 1 is -127/127 to 127/127
+Coarse changes to +-127
+127*127 = +-16,129
+
+receivers should track the animated locale. 
+
+X 0.25 is positive 0.75 is negative 
+Move_aim_Z y aim, x rotates y offset receivers
+Move_aim_Y z aim, x rotates y offset receivers
+Move_aim_X z aim, y rotates z offset receivers
+
+Need to add rotation structure
+need to add local and remote parent constraints for ___WorldSyncResetTarget and precise_z
