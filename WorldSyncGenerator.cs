@@ -13,6 +13,7 @@ using WorldSyncAAC.AnimatorAsCode.V0;
 using VRC.SDK3.Avatars.Components;
 using VRC.SDK3.Avatars.ScriptableObjects;
 using UnityEngine.Animations;
+using System.Reflection;
 
 namespace Juzo.WorldSyncGenerator
 {
@@ -42,6 +43,8 @@ namespace Juzo.WorldSyncGenerator
 
         private GameObject toggleObject;
         private AacFlBase aac;
+
+        private AnimatorController animatorController;
         const HideFlags embedHideFlags = HideFlags.HideInHierarchy | HideFlags.HideInInspector | HideFlags.NotEditable;
 
         static List<string> axisBinary = new List<string>{ "X", "Y", "Z" };
@@ -64,6 +67,8 @@ namespace Juzo.WorldSyncGenerator
             toggleObject = new GameObject("ToggleObject");
             toggleObject.transform.parent = WorldDropContainer.transform;
 
+            var fx = aac.CreateMainFxLayer();
+            
         }
 
         public override void OnInspectorGUI()
@@ -93,6 +98,7 @@ namespace Juzo.WorldSyncGenerator
             CreateWorldSpaceConstraint();
             GameObject finalDepth = CreateInitialGameObjectStructure();
             CreateFiniteStateMachine(finalDepth);
+            CreateAnimationsPreciseCoarseMacro();
         }
         public void CreateWorldSpaceConstraint(){
             GameObject world = AssetDatabase.FindAssets("World",new[] {"Assets/WorldSync2/DoNotUse"}).Select(guid => AssetDatabase.GUIDToAssetPath(guid)).Select(path => AssetDatabase.LoadAssetAtPath<GameObject>(path)).FirstOrDefault();
@@ -302,13 +308,63 @@ namespace Juzo.WorldSyncGenerator
 
         }
 
-        public void CreateBlendTreeStructure()
+        public static string GetGameObjectPath(GameObject obj)
         {
+            string path = "";
+            while (obj.transform.parent != null)
+            {
+                path = obj.name + path;
+                obj = obj.transform.parent.gameObject;
+                if (obj.transform.parent != null)
+                {
+                    path = "/" + path;
+                }
+            }
+            return path;
+        }
+
+        public void CreateAnimationsPreciseCoarseMacro(){
+
+
+            var blendtreeLayer = aac.CreateSupportingFxLayer("__worldSync_" + worldSync.assetKey + "_AxisBlendTrees");
+            var param = blendtreeLayer.FloatParameter("__worldSync" + worldSync.assetKey + "/dummyWeight");
+            blendtreeLayer.OverrideValue(param, 1);
             BlendTree combinedBlendTree = aac.NewBlendTreeAsRaw();
             combinedBlendTree.blendType = BlendTreeType.Direct;
+            combinedBlendTree.blendParameter = param.Name;
+            combinedBlendTree.minThreshold = 0;
+            combinedBlendTree.maxThreshold = 1;
+            combinedBlendTree.children = new ChildMotion[0];
+            combinedBlendTree.name = "Combined Movement Axis";
+            var blendTreeDefault = blendtreeLayer.NewState("Combined Movement Axis");
+            blendTreeDefault.WithAnimation(combinedBlendTree);
+            blendTreeDefault.WithWriteDefaultsSetTo(true);
             
 
+            const string positionPropName = "m_LocalPosition";
+            foreach(string axis in axisBinary){
+                foreach(string size in sizeBinary){
+                    AacFlClip clip = aac.NewClip("Pos_Move_" + size + "_" + axis);
+                    AacFlClip negclip = aac.NewClip("Neg_Move_" + size + "_" + axis);
+                    AacFlClip zeroClip = aac.NewClip("Zero_Move_" + size + "_" + axis);
+                    var maxThreshold = size == "Macro" ? 127*127 : size == "Coarse" ? 127 : 1;
+                    GameObject animatedObject = GameObject.Find(size + "_" + axis);
+                    // twice to handle unity animation rules
+                    clip.Animating(anim => anim.Animates(GetGameObjectPath(animatedObject) , typeof(Transform), positionPropName + "." + axis.ToLowerInvariant()).WithOneFrame(maxThreshold));
+                    negclip.Animating(anim => anim.Animates(GetGameObjectPath(animatedObject) , typeof(Transform), positionPropName + "." + axis.ToLowerInvariant()).WithOneFrame(-1 * maxThreshold));
+                    clip.Animating(anim => anim.Animates(GetGameObjectPath(animatedObject) , typeof(Transform), positionPropName + "." + axis.ToLowerInvariant()).WithOneFrame(maxThreshold));
+                    negclip.Animating(anim => anim.Animates(GetGameObjectPath(animatedObject) , typeof(Transform), positionPropName + "." + axis.ToLowerInvariant()).WithOneFrame(-1 * maxThreshold));
+                    zeroClip.Animating(anim => anim.Animates(GetGameObjectPath(animatedObject) , typeof(Transform), positionPropName + "." + axis.ToLowerInvariant()).WithOneFrame(0));
+                    zeroClip.Animating(anim => anim.Animates(GetGameObjectPath(animatedObject) , typeof(Transform), positionPropName + "." + axis.ToLowerInvariant()).WithOneFrame(0));
+
+                // clipImplodeControlled.Animating(anim => anim.Animates(mover + currentPathGroupPosition, typeof(Transform), $"{positionPropName}.y").WithOneFrame(-1f));
+                    BlendTree blendTree = CreateTriBlendTree(blendtreeLayer.FloatParameter("__worldSync" + worldSync.assetKey + "/" + axis + "_" + size), negclip, zeroClip, clip, axis + "_" + size);
+                    ChildMotion childMotion = new ChildMotion{motion = blendTree, timeScale = 1, threshold = 0, directBlendParameter=param.Name};
+                    combinedBlendTree.children = combinedBlendTree.children.Concat(new []{childMotion}).ToArray();
+                }
+            }
         }
+
         public void AddBlendTreeToDirectBlendTree(BlendTree directBlendTree, BlendTree blendTree)
         {
             // Add blendtree to direct blendtree
@@ -317,7 +373,7 @@ namespace Juzo.WorldSyncGenerator
         private BlendTree CreateTriBlendTree(AacFlFloatParameter controlParameter,AacFlClip minusClip,  AacFlClip zeroClip, AacFlClip oneClip, string name = "")
         {
             BlendTree blendTree = aac.NewBlendTreeAsRaw();
-            blendTree.blendType = BlendTreeType.Direct;
+            blendTree.blendType = BlendTreeType.Simple1D;
             blendTree.blendParameter = controlParameter.Name;
             blendTree.minThreshold = -1;
             blendTree.maxThreshold = 1;
@@ -346,6 +402,7 @@ namespace Juzo.WorldSyncGenerator
             }
             DestroyImmediate(worldDropRoot);
             DestroyImmediate(resetTarget);
+            aac.ClearPreviousAssets();
         }
     }
 }
